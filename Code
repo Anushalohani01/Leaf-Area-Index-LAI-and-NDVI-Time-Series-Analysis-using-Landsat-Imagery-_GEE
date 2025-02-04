@@ -1,0 +1,126 @@
+//Estimate Leaf Area Index (LAI) and NDVI Time Series Analysis using Landsat Imagery
+
+var roi = ee.Geometry.Polygon([
+          [84.92929359903475, 27.980431613887653],
+          [84.92929359903475, 27.264982063868707],
+          [85.87961098184725, 27.264982063868707],
+          [85.87961098184725, 27.980431613887653],
+  ]);
+  
+Map.centerObject(roi,9);
+Map.addLayer(roi,{}, 'study area');
+
+//Define the time range
+var startDate= ee.Date ('2015-01-01')
+var endDate= ee.Date ('2024-12-30')
+
+//Load land set 8 Collection
+var landsatCollection = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+.filterDate (startDate, endDate)
+.filterBounds(roi)
+.filter(ee.Filter.lt('CLOUD_COVER', 10))  // Remove cloudy images
+.select (['SR_B2', 'SR_B4', 'SR_B5']);  // Select relevant bands
+
+
+// 4. Function to Compute NDVI & LAI
+var computeVegetationIndices = function(image) {
+  // Scale surface reflectance bands
+  var scaledBands = image.select(['SR_B2', 'SR_B4', 'SR_B5']).multiply(0.0000275).add(-0.2);
+  
+  // Compute NDVI
+  var ndvi = scaledBands.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI');
+
+  // Compute EVI (Enhanced Vegetation Index)
+  var evi = scaledBands.expression(
+    '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+      'NIR': scaledBands.select('SR_B5'),
+      'RED': scaledBands.select('SR_B4'),
+      'BLUE': scaledBands.select('SR_B2')
+    }).rename('EVI');
+
+  // Compute LAI using EVI
+  var lai = evi.expression(
+    '3.618 * EVI - 0.118', {'EVI': evi}).rename('LAI');
+
+  return image.addBands(ndvi).addBands(lai)
+    .copyProperties(image, ['system:time_start', 'system:index']);
+};
+
+// 5. Apply Computation to Landsat Collection
+var vegetationCollection = landsatCollection.map(computeVegetationIndices);
+
+// 6. Generate Time Series Chart for NDVI (2015-2024)
+print(ui.Chart.image.series({
+  imageCollection: vegetationCollection.select('NDVI'),
+  region: roi,
+  reducer: ee.Reducer.mean(),
+  scale: 500,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'NDVI Time Series (2015-2024)',
+  hAxis: {title: 'Year'},
+  vAxis: {title: 'NDVI'},
+  lineWidth: 2,
+  colors: ['green']
+}));
+
+// 7. Generate Time Series Chart for LAI (2015-2024)
+print(ui.Chart.image.series({
+  imageCollection: vegetationCollection.select('LAI'),
+  region: roi,
+  reducer: ee.Reducer.median(),
+  scale: 500,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'LAI Time Series (2015-2024)',
+  hAxis: {title: 'Year'},
+  vAxis: {title: 'LAI'},
+  lineWidth: 2,
+  colors: ['blue']
+}));
+
+// 8. Extract NDVI & LAI for 2020 Separately
+var ndvi2024 = vegetationCollection.filterDate('2024-01-01', '2024-12-31').mean().select('NDVI');
+var lai2024 = vegetationCollection.filterDate('2024-01-01', '2024-12-31').mean().select('LAI');
+
+// 9. Visualization Parameters
+var ndviVis = {
+  min: -1,
+  max: 1,
+  palette: ['brown', 'yellow', 'green']
+};
+
+var laiVis = {
+  min: 0,
+  max: 5,
+  palette: ['yellow', 'green', 'darkgreen']
+};
+
+// 10. Add NDVI & LAI 2020 to Map Separately
+Map.addLayer(ndvi2024.clip(roi), ndviVis, 'NDVI - 2024');
+Map.addLayer(lai2024.clip(roi), laiVis, 'LAI - 2024');
+
+// 11. Export NDVI 2024 Separately
+Export.image.toDrive({
+  image: ndvi2024.clip(roi),
+  description: 'NDVI_2024_Analysis',
+  scale: 30,
+  region: roi,
+  crs: 'EPSG:4326',
+  folder: 'NDVI_LAI_Analysis',
+  maxPixels: 1e13
+});
+
+// 12. Export LAI 2024 Separately
+Export.image.toDrive({
+  image: lai2024.clip(roi),
+  description: 'LAI_2024_Analysis',
+  scale: 30,
+  region: roi,
+  crs: 'EPSG:4326',
+  folder: 'NDVI_LAI_Analysis',
+  maxPixels: 1e13
+});
+
+
+
